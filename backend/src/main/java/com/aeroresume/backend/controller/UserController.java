@@ -4,7 +4,6 @@
  */
 package com.aeroresume.backend.controller;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,13 +20,16 @@ import com.aeroresume.backend.service.UserService;
  * @author suhaib
  */
 @RestController
-@RequestMapping("/api/user")
+@RequestMapping("/api/user/profile")
 public class UserController {
     
-    @Autowired
     private UserService userService;
 
-    @GetMapping("/profile")
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+
+    @GetMapping("/")
     public ResponseEntity<?> getUserProfile(@AuthenticationPrincipal CustomUserDetails userDetail) {
         
         Long id = userDetail.getId();
@@ -37,7 +39,7 @@ public class UserController {
         return ResponseEntity.ok().body(userProfile);
     }
 
-    @PutMapping("/profile")
+    @PutMapping("/")
     public ResponseEntity<?> updateUserProfile(@AuthenticationPrincipal CustomUserDetails userDetail, @RequestBody UserDto updatedUserDto) {
         Long id = userDetail.getId();
 

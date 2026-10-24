@@ -54,7 +54,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> 
                 auth.requestMatchers("/api/auth/**").permitAll() // Public: Login & Signup
-                    .requestMatchers("/templates/**").permitAll() // Public: Maybe template gallery
+                    .requestMatchers("/templateCatalog/**").permitAll() // Public: Maybe template gallery
                     .anyRequest().authenticated() // Secure everything else!
             );
 

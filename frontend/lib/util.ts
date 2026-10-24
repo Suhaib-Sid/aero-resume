@@ -1,5 +1,5 @@
-type Fields = {
-  name: string
+export type Fields = {
+  name: string;
   placeholder: string;
   type: string;
 };

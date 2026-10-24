@@ -6,13 +6,11 @@ package com.aeroresume.backend.repository;
 
 import com.aeroresume.backend.model.Template;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-
 /**
  *
  * @author suhaib
  */
-@Repository
+
 public interface TemplateRepository extends JpaRepository<Template, Long> {
     // JpaRepository gives us findAll().
 }
