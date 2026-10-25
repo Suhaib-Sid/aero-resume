@@ -1,5 +1,6 @@
 package com.aeroresume.backend.service;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -10,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.aeroresume.backend.dto.ResumeResponse;
+import com.aeroresume.backend.mapper.ResumeMapper;
 import com.aeroresume.backend.model.Resume;
 import com.aeroresume.backend.model.Template;
 import com.aeroresume.backend.model.User;
@@ -28,17 +31,20 @@ public class ResumeService {
     private ResumeRepository resumeRepository;
     private TemplateRepository templateRepository;
     private UserRepository userRepository;
+    private ResumeMapper resumeMapper;
 
     public ResumeService(@Value("${resume.storage.temp-workspace}") String tempWorkspacePath, 
                         @Value("${resume.storage.permanentPath}") String permanentStoragePath,
                         ResumeRepository resumeRepository,
                         TemplateRepository templateRepository,
-                        UserRepository userRepository) {
+                        UserRepository userRepository,
+                        ResumeMapper resumeMapper) {
         this.tempWorkspacePath = tempWorkspacePath;
         this.permanentStoragePath = permanentStoragePath;
         this.resumeRepository = resumeRepository;
         this.templateRepository = templateRepository;
         this.userRepository = userRepository;
+        this.resumeMapper = resumeMapper;
     }
 
     /**
@@ -49,7 +55,7 @@ public class ResumeService {
      * @param resumeId      The ID of the resume (used for naming the final export file)
      * @return              The binary bytes of the generated PDF
      */
-    public byte[] compileResume(String latexString, boolean isFinalExport, Long userId, Long resumeId, String resumeName, Long templateId) {
+    public byte[] compileResume(String latexString, boolean isFinalExport, Long userId, Long resumeId, String resumeName) {
 
         String runId = UUID.randomUUID().toString();
         Path userWorkspace = Path.of(tempWorkspacePath, String.valueOf(userId));
@@ -104,8 +110,7 @@ public class ResumeService {
 
             compilationSuccess = process.exitValue() == 0;
             if(!compilationSuccess) {
-                String errorOutput = Files.readString(logFilePath);
-                log.error("LaTeX compilation failed for userId: {} on Run: {}. Error: {}", userId, runId, errorOutput);
+                log.error("LaTeX compilation failed for userId: {} on Run: {}.", userId, runId);
                 throw new RuntimeException("LaTeX compilation failed. Check log file for details.");
             }
 
@@ -113,22 +118,11 @@ public class ResumeService {
 
             byte[] pdfBytes = Files.readAllBytes(pdfFilePath);
 
-            Resume resume = null;
-            if(resumeId > -1) {
-                resume = resumeRepository.findById(resumeId).orElseThrow(() -> new RuntimeException("Resume not found."));
-                resume.setLatexContent(latexString);
-                resume.setTemplate(templateRepository.findById(templateId).orElse(null));
-                resumeRepository.save(resume);
-                log.info("Resume entity updated with LaTeX content and template for resumeId: {}", resumeId);
-            } else {
-                resume = new Resume();
-                resume.setName(resumeName);
-                resume.setLatexContent(latexString);
-                resume.setTemplate(templateRepository.findById(templateId).orElse(null));
-                resume.setUser(userRepository.findById(userId).orElse(null));
-                resume = resumeRepository.save(resume);
-                log.info("New Resume entity created with LaTeX content and template for userId: {}", userId);
-            }
+            Resume resume = resumeRepository.findByIdAndUserId(resumeId, userId).orElseThrow(() -> new RuntimeException("Resume not found."));
+            resume.setName(resumeName);
+            resume.setLatexContent(latexString);
+            resumeRepository.save(resume);
+            log.info("Resume entity updated with LaTeX content and template for resumeId: {}", resumeId);
 
             if(isFinalExport) {
                 // Move the PDF to permanent storage
@@ -139,29 +133,27 @@ public class ResumeService {
             return pdfBytes;
 
         } catch (Exception e) {
-            log.error("Error during LaTeX compilation for userId: {} on Run: {}. Error: {}", userId, runId, e.getMessage(), e);
+            log.error("Error during LaTeX compilation for userId: {} on Run: {}.", userId, runId);
             Thread.currentThread().interrupt(); // Restore interrupted status
             throw new RuntimeException("Error during LaTeX compilation: " + e.getMessage(), e);
         } finally {
             // Cleanup temporary files
-            deleteIfExists(texFilePath);
-            if(compilationSuccess) {
-                deleteIfExists(logFilePath);
+            try {
+                Files.deleteIfExists(texFilePath);
+                Files.deleteIfExists(auxFilePath);
+                Files.deleteIfExists(outFilePath);
+                Files.deleteIfExists(pdfFilePath);
+                if(compilationSuccess) {
+                    Files.deleteIfExists(logFilePath);
+                }
+                if(Files.exists(userWorkspace) && Files.list(userWorkspace).findAny().isEmpty()) {
+                    Files.delete(userWorkspace);
+                }
+            } catch (IOException e) {
+                log.warn("Failed to delete empty user workspace for userId: {} on Run: {}. Error: {}", userId, runId, e.getMessage(), e);
             }
-            deleteIfExists(auxFilePath);
-            deleteIfExists(outFilePath);
-            deleteIfExists(pdfFilePath);
-            deleteIfExists(userWorkspace);
             
             log.info("Temporary files cleaned up for userId: {} on Run: {}", userId, runId);
-        }
-    }
-
-    private void deleteIfExists(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (Exception e) {
-            log.warn("Failed to delete temp file: {}. This may cause a minor storage leak over time. Error: {}", path, e.getMessage(), e);
         }
     }
 
@@ -208,6 +200,27 @@ public class ResumeService {
 
         // Replace placeholders in the LaTeX boilerplate with user data
         
-        return latexString;
+        return user.getMasterJsonData() + latexString;
+    }
+
+    public ResumeResponse createResume(Long userId, Long templateId, String resumeName) {
+        
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found for id: " + userId));
+
+        Template template = templateRepository.findById(templateId)
+                .orElseThrow(() -> new RuntimeException("Template not found for id: " + templateId));
+
+        Resume resume = new Resume();
+        resume.setName(resumeName);
+        resume.setUser(user);
+        resume.setTemplate(template);
+        resume.setRawJsonData(user.getMasterJsonData());
+        resume.setLatexContent(getLatex(userId, templateId));
+
+        Resume savedResume = resumeRepository.save(resume);
+        log.info("New Resume created with ID: {} for userId: {} using templateId: {}", savedResume.getId(), userId, templateId);
+
+        return resumeMapper.resumeToResumeResponse(savedResume);
     }
 }

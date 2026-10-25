@@ -3,8 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, FileText, LayoutTemplate, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
-import { API_BASE_URL } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { API_BASE_URL, getApiErrorMessage } from "@/lib/api";
+import AccountActions from "../_components/AccountActions";
 
 type ResumeTemplate = {
   id: number;
@@ -34,10 +36,16 @@ function getPreviewUrl(path?: string | null) {
 }
 
 export default function TemplatesPage() {
+  const router = useRouter();
   const [templates, setTemplates] = useState<ResumeTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [creatingTemplateId, setCreatingTemplateId] = useState<number | null>(null);
   const [needsSignIn, setNeedsSignIn] = useState(false);
-  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [resumeName, setResumeName] = useState("");
+  const [resumeNameError, setResumeNameError] = useState("");
+  const resumeNameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,9 +64,7 @@ export default function TemplatesPage() {
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error(
-            (await response.text()) || `Could not load templates (${response.status}).`,
-          );
+          throw new Error(await getApiErrorMessage(response, `Could not load templates (${response.status}).`));
         }
 
         const data: unknown = await response.json();
@@ -71,7 +77,7 @@ export default function TemplatesPage() {
         setTemplates(data);
       } catch (loadError) {
         if (loadError instanceof DOMException && loadError.name === "AbortError") return;
-        setError(
+        setLoadError(
           loadError instanceof Error ? loadError.message : "Unable to load templates.",
         );
       } finally {
@@ -83,6 +89,76 @@ export default function TemplatesPage() {
     return () => controller.abort();
   }, []);
 
+  const startProject = async (template: ResumeTemplate) => {
+    if (creatingTemplateId !== null) return;
+    const trimmedResumeName = resumeName.trim();
+    if (!trimmedResumeName) {
+      setResumeNameError("Enter a name for your resume before choosing a template.");
+      resumeNameInputRef.current?.focus();
+      return;
+    }
+
+    setCreatingTemplateId(template.id);
+    setCreateError("");
+    setResumeNameError("");
+
+    try {
+      const token = window.localStorage.getItem("token");
+      if (!token) {
+        setNeedsSignIn(true);
+        return;
+      }
+
+      const query = new URLSearchParams({
+        templateId: String(template.id),
+        resumeName: trimmedResumeName,
+      });
+      const response = await fetch(`${API_BASE_URL}/api/resume/?${query}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      if (!response.ok) {
+        throw new Error(
+          await getApiErrorMessage(response, `Could not create a resume (${response.status}).`),
+        );
+      }
+
+      const payload: unknown = await response.json();
+      if (typeof payload !== "object" || payload === null) {
+        throw new Error("The resume service returned an unexpected response.");
+      }
+      const createdResume = payload as Record<string, unknown>;
+      const resumeId = createdResume.id;
+      const latexString = createdResume.latexContent;
+      const createdName = createdResume.name;
+      if (
+        typeof resumeId !== "number" ||
+        !Number.isSafeInteger(resumeId) ||
+        resumeId <= 0 ||
+        typeof latexString !== "string" ||
+        !latexString.trim() ||
+        typeof createdName !== "string" ||
+        !createdName.trim()
+      ) {
+        throw new Error("The resume service returned an invalid resume response.");
+      }
+
+      window.sessionStorage.setItem(
+        `aero-resume-draft-${resumeId}`,
+        JSON.stringify({ latexString, resumeName: createdName }),
+      );
+      router.push(`/editor?templateId=${template.id}&resumeId=${resumeId}`);
+    } catch (createError) {
+      setCreateError(
+        createError instanceof Error
+          ? createError.message
+          : "Unable to start the resume project. Please try again.",
+      );
+    } finally {
+      setCreatingTemplateId(null);
+    }
+  };
+
   return (
     <main className="templates-page">
       <header className="landing-header templates-header">
@@ -91,14 +167,37 @@ export default function TemplatesPage() {
           <span>Aero<span className="brand-light">Resume</span></span>
         </Link>
         <Link className="templates-back" href="/"><ArrowLeft size={15} /> Home</Link>
+        <AccountActions />
       </header>
 
       <section className="templates-content">
         <div className="templates-intro">
           <span className="landing-eyebrow"><LayoutTemplate size={14} /> TEMPLATE GALLERY</span>
           <h1>Choose your starting point</h1>
-          <p>Select a template to open your editor and start shaping your resume.</p>
+          <p>Name your resume, then select a template to open the editor.</p>
         </div>
+
+        <label className="new-resume-name-field">
+          <span>Resume name</span>
+          <input
+            ref={resumeNameInputRef}
+            aria-label="Resume name"
+            aria-invalid={Boolean(resumeNameError)}
+            aria-describedby={resumeNameError ? "new-resume-name-error" : undefined}
+            placeholder="For example, Product Designer Resume"
+            value={resumeName}
+            onChange={(event) => {
+              setResumeName(event.target.value);
+              if (event.target.value.trim()) setResumeNameError("");
+            }}
+            maxLength={120}
+          />
+        </label>
+        {resumeNameError && (
+          <p className="template-error template-name-error" id="new-resume-name-error" role="alert">
+            {resumeNameError}
+          </p>
+        )}
 
         {isLoading && <p className="template-state">Loading available templates…</p>}
 
@@ -110,20 +209,23 @@ export default function TemplatesPage() {
           </div>
         )}
 
-        {error && <p className="template-state template-error" role="alert">{error}</p>}
+        {loadError && <p className="template-state template-error" role="alert">{loadError}</p>}
+        {createError && <p className="template-state template-error" role="alert">{createError}</p>}
 
-        {!isLoading && !needsSignIn && !error && templates.length === 0 && (
+        {!isLoading && !needsSignIn && !loadError && templates.length === 0 && (
           <p className="template-state">No resume templates are available yet.</p>
         )}
 
-        {!isLoading && !needsSignIn && !error && templates.length > 0 && (
+        {!isLoading && !needsSignIn && !loadError && templates.length > 0 && (
           <div className="template-grid">
             {templates.map((template) => {
               const previewUrl = getPreviewUrl(template.previewImageUrl);
               return (
-                <Link
+                <button
                   className="template-card"
-                  href={`/editor?templateId=${encodeURIComponent(template.id)}`}
+                  type="button"
+                  onClick={() => void startProject(template)}
+                  disabled={creatingTemplateId !== null}
                   key={template.id}
                 >
                   <div className="template-image">
@@ -142,11 +244,17 @@ export default function TemplatesPage() {
                   <div className="template-card-details">
                     <span>
                       <strong>{template.name}</strong>
-                      <small>Resume template</small>
+                      <small>
+                        {creatingTemplateId === template.id
+                          ? "Starting project…"
+                          : "Resume template"}
+                      </small>
                     </span>
-                    <span className="template-card-arrow"><ArrowRight size={17} /></span>
+                    <span className="template-card-arrow">
+                      {creatingTemplateId === template.id ? "…" : <ArrowRight size={17} />}
+                    </span>
                   </div>
-                </Link>
+                </button>
               );
             })}
           </div>

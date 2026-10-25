@@ -1,6 +1,7 @@
 package com.aeroresume.backend.controller;
 
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.aeroresume.backend.dto.CompileResumeRequest;
+import com.aeroresume.backend.dto.ResumeResponse;
 import com.aeroresume.backend.security.CustomUserDetails;
 import com.aeroresume.backend.service.ResumeService;
 
@@ -24,6 +26,14 @@ public class ResumeController {
         this.resumeService = resumeService;
     }
 
+    @PostMapping("/")
+    public ResponseEntity<ResumeResponse> createResume(@RequestParam Long templateId, @RequestParam String resumeName, @AuthenticationPrincipal CustomUserDetails userDetail) {
+        Long userId = userDetail.getId();
+        ResumeResponse resume = resumeService.createResume(userId, templateId, resumeName);
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(resume);
+    }
+
     @PostMapping("/compile")
     public ResponseEntity<byte[]> compileResume(@RequestBody CompileResumeRequest request, @AuthenticationPrincipal CustomUserDetails userDetail) {
         Long userId = userDetail.getId();
@@ -33,8 +43,7 @@ public class ResumeController {
             request.isFinalExport(),
             userId,
             request.getResumeId(),
-            request.getResumeName(),
-            request.getTemplateId()
+            request.getResumeName()
         );
         
         return ResponseEntity.ok()
@@ -44,9 +53,9 @@ public class ResumeController {
 
     }
 
-    @PostMapping("/latex")
-    public String getLatexString(@AuthenticationPrincipal CustomUserDetails userDetail, @RequestParam Long templateId) {
-        Long userId = userDetail.getId();
-        return resumeService.getLatex(userId, templateId);
-    }
+    // @PostMapping("/latex")
+    // public String getLatexString(@AuthenticationPrincipal CustomUserDetails userDetail, @RequestParam Long templateId) {
+    //     Long userId = userDetail.getId();
+    //     return resumeService.getLatex(userId, templateId);
+    // }
 }

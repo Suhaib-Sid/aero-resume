@@ -15,30 +15,80 @@ import {
   WandSparkles,
 } from "lucide-react";
 import Link from "next/link";
+import AccountActions from "../_components/AccountActions";
 import {
   FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
+  useSyncExternalStore,
   useState,
 } from "react";
-import { API_BASE_URL } from "@/lib/api";
+import { API_BASE_URL, getApiErrorMessage } from "@/lib/api";
 
 type ChatMessage = {
   role: "assistant" | "user";
   text: string;
 };
 
-export default function EditorWorkspace({ templateId }: { templateId: string }) {
-  const [latex, setLatex] = useState("");
-  const [isLoadingLatex, setIsLoadingLatex] = useState(true);
-  const [isLatexLoaded, setIsLatexLoaded] = useState(false);
+type ResumeDraft = {
+  latexString: string;
+  resumeName: string;
+};
+
+export default function EditorWorkspace({
+  templateId,
+  resumeId,
+}: {
+  templateId: string;
+  resumeId: number;
+}) {
+  const draftStorageKey = `aero-resume-draft-${resumeId}`;
+  const storedDraft = useSyncExternalStore(
+    (onStoreChange) => {
+      window.addEventListener("storage", onStoreChange);
+      window.addEventListener("aero-resume-draft", onStoreChange);
+      return () => {
+        window.removeEventListener("storage", onStoreChange);
+        window.removeEventListener("aero-resume-draft", onStoreChange);
+      };
+    },
+    () => window.sessionStorage.getItem(draftStorageKey),
+    () => undefined,
+  );
+  const draft = useMemo<ResumeDraft | null>(() => {
+    if (!storedDraft) return null;
+    try {
+      const value: unknown = JSON.parse(storedDraft);
+      if (typeof value !== "object" || value === null) return null;
+      const record = value as Record<string, unknown>;
+      if (
+        typeof record.latexString !== "string" ||
+        typeof record.resumeName !== "string"
+      ) {
+        return null;
+      }
+      return { latexString: record.latexString, resumeName: record.resumeName };
+    } catch {
+      return null;
+    }
+  }, [storedDraft]);
+  const [editedLatex, setEditedLatex] = useState<string | null>(null);
+  const [editedResumeName, setEditedResumeName] = useState<string | null>(null);
+  const latex = editedLatex ?? draft?.latexString ?? "";
+  const resumeName = editedResumeName ?? draft?.resumeName ?? "";
+  const isLoadingLatex = storedDraft === undefined;
+  const isLatexLoaded = Boolean(draft?.latexString.trim());
+  const sourceUnavailableError =
+    storedDraft !== undefined && !isLatexLoaded
+      ? "The draft source is not available or invalid in this browser tab. Return to the template gallery and start the project again."
+      : "";
   const [pdfUrl, setPdfUrl] = useState("");
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileError, setCompileError] = useState("");
-  const [resumeName, setResumeName] = useState("");
+  const displayError = compileError || sourceUnavailableError;
   const [resumeNameError, setResumeNameError] = useState("");
-  const [resumeIdMissing, setResumeIdMissing] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
@@ -49,62 +99,12 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
   const [chatNotice, setChatNotice] = useState("");
   const gutterRef = useRef<HTMLDivElement>(null);
   const resumeNameInputRef = useRef<HTMLInputElement>(null);
-  const resumeIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     };
   }, [pdfUrl]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    const loadLatex = async () => {
-      const token = window.localStorage.getItem("token");
-      if (!token) {
-        setCompileError("Sign in first to start a resume project.");
-        setIsLoadingLatex(false);
-        return;
-      }
-
-      try {
-        const response = await fetch(
-          `${API_BASE_URL}/api/resume/latex?templateId=${encodeURIComponent(templateId)}`,
-          {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-            signal: controller.signal,
-          },
-        );
-        if (!response.ok) {
-          throw new Error(
-            (await response.text()) || `Could not load LaTeX (${response.status}).`,
-          );
-        }
-
-        const source = await response.text();
-        if (!source.trim() || source.trim() === "null") {
-          throw new Error(
-            "The backend returned no LaTeX. Please check that the template is valid and try again.",
-          );
-        }
-
-        setLatex(source);
-        setIsLatexLoaded(true);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setCompileError(
-          error instanceof Error ? error.message : "Unable to load the selected template.",
-        );
-      } finally {
-        if (!controller.signal.aborted) setIsLoadingLatex(false);
-      }
-    };
-
-    void loadLatex();
-    return () => controller.abort();
-  }, [templateId]);
 
   const compileResume = useCallback(async (source: string) => {
     const trimmedResumeName = resumeName.trim();
@@ -113,13 +113,6 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
       resumeNameInputRef.current?.focus();
       return;
     }
-    if (resumeIdMissing) {
-      setCompileError(
-        "The backend did not return this resume's ID. Update the compile endpoint to return the X-Resume-Id header before compiling again.",
-      );
-      return;
-    }
-
     const token = window.localStorage.getItem("token");
     if (!token) {
       setCompileError("Sign in first to compile your resume.");
@@ -144,15 +137,16 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
             resumeName: trimmedResumeName,
             latexString: source,
             isFinalExport: false,
-            resumeId: resumeIdRef.current ?? -1,
+            resumeId,
             templateId: Number(templateId),
           }),
         },
       );
 
       if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Compilation failed (${response.status}).`);
+        throw new Error(
+          await getApiErrorMessage(response, `Compilation failed (${response.status}).`),
+        );
       }
 
       const responseBlob = await response.blob();
@@ -162,18 +156,6 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
       if (!header.startsWith("%PDF-")) {
         const detail = await responseBlob.text();
         throw new Error(detail || "The server did not return a valid PDF.");
-      }
-
-      const returnedResumeId = response.headers.get("X-Resume-Id");
-      const parsedResumeId = returnedResumeId ? Number(returnedResumeId) : NaN;
-      if (Number.isSafeInteger(parsedResumeId) && parsedResumeId > 0) {
-        resumeIdRef.current = parsedResumeId;
-        setResumeIdMissing(false);
-      } else {
-        setResumeIdMissing(true);
-        setCompileError(
-          "PDF compiled, but the backend did not return a valid X-Resume-Id header. Update the backend before compiling this resume again.",
-        );
       }
 
       const pdf = new Blob([responseBlob], { type: "application/pdf" });
@@ -187,7 +169,7 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
     } finally {
       setIsCompiling(false);
     }
-  }, [resumeIdMissing, resumeName, templateId]);
+  }, [resumeId, resumeName, templateId]);
 
   const downloadResume = () => {
     if (!pdfUrl) return;
@@ -237,13 +219,14 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
             placeholder="Name your resume"
             value={resumeName}
             onChange={(event) => {
-              setResumeName(event.target.value);
+              setEditedResumeName(event.target.value);
               if (event.target.value.trim()) setResumeNameError("");
             }}
             maxLength={120}
           />
         </label>
         <div className="topbar-spacer" />
+        <AccountActions />
         <div className="save-state">
           <span className="status-dot" />
           {isLoadingLatex ? "Loading template" : "Draft in editor"}
@@ -291,7 +274,7 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
                 autoCorrect="off"
                 spellCheck={false}
                 value={latex}
-                onChange={(event) => setLatex(event.target.value)}
+                onChange={(event) => setEditedLatex(event.target.value)}
                 onScroll={(event) => {
                   if (gutterRef.current) {
                     gutterRef.current.scrollTop = event.currentTarget.scrollTop;
@@ -396,7 +379,10 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
             </div>
           </div>
           <div className="preview-toolbar">
-            <span className="preview-file"><FileText size={14} /> resume.pdf</span>
+            <span className="preview-file">
+              <FileText size={14} />
+              {resumeName.trim() ? `${resumeName.trim()}.pdf` : "Resume preview"}
+            </span>
             <div className="preview-toolbar-right">
               <span>{pdfUrl ? "PDF ready" : "Preview"}</span>
               <span className="toolbar-divider" />
@@ -420,15 +406,15 @@ export default function EditorWorkspace({ templateId }: { templateId: string }) 
                   ? "Loading the selected resume template…"
                   : isCompiling
                     ? "Compiling your resume…"
-                    : compileError
+                    : displayError
                       ? "The PDF preview will appear here after compilation succeeds."
                       : "Your compiled PDF preview will appear here."}
               </div>
             )}
           </div>
           <div className="preview-footer">
-            <span className={compileError ? "preview-error" : ""}>
-              {compileError || "Your compiled resume will appear here."}
+            <span className={displayError ? "preview-error" : ""} role={displayError ? "alert" : undefined}>
+              {displayError || "Your compiled resume will appear here."}
             </span>
             <span>{pdfUrl ? "PDF" : "Waiting for compile"}</span>
           </div>

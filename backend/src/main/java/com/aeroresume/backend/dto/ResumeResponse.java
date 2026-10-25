@@ -4,15 +4,15 @@ public class ResumeResponse {
     private Long id;
     private String name;
     private String latexContent;
-    private String pdfFilePath;
+    private String finalExportUrl;
 
     public ResumeResponse() {}
 
-    public ResumeResponse(Long id, String name, String latexContent, String pdfFilePath) {
+    public ResumeResponse(Long id, String name, String latexContent, String finalExportUrl) {
         this.id = id;
         this.name = name;
         this.latexContent = latexContent;
-        this.pdfFilePath = pdfFilePath;
+        this.finalExportUrl = finalExportUrl;
     }
 
     public Long getId() {
@@ -39,11 +39,11 @@ public class ResumeResponse {
         this.latexContent = latexContent;
     }
 
-    public String getPdfFilePath() {
-        return pdfFilePath;
+    public String getFinalExportUrl() {
+        return finalExportUrl;
     }
 
-    public void setPdfFilePath(String pdfFilePath) {
-        this.pdfFilePath = pdfFilePath;
+    public void setFinalExportUrl(String finalExportUrl) {
+        this.finalExportUrl = finalExportUrl;
     }
 }

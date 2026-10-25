@@ -6,6 +6,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
+import AccountActions from "./_components/AccountActions";
 
 export default function Home() {
   return (
@@ -17,7 +18,7 @@ export default function Home() {
           </span>
           <span>Aero<span className="brand-light">Resume</span></span>
         </Link>
-        <Link className="landing-signin" href="/auth">Sign in</Link>
+        <AccountActions />
       </header>
 
       <section className="landing-hero">
